@@ -85,19 +85,17 @@ std::vector<double> VoxelGrid::RayTrace(
     );
     openvdb::Vec3d eye(T(0, 3), T(1, 3), T(2, 3));
 
-    // pybind11::array_t<double> arr({width, height});
-    // double* data_ptr = arr.mutable_unchecked<2>().data();
     std::vector<double> data(height * width, max_distance);
 
     #pragma omp parallel for 
     for (int y = 0; y < height; ++y) {
         double normalized_y = (y - c_y) / f_y;
-        // Get the "unsafe" version of the grid accessors
+        // each thread needs its own hdda
         openvdb::math::VolumeHDDA<VoxelTreeType, openvdb::math::Ray<float>, 2> hdda;
+        // Get the "unsafe" version of the grid accessors, one per thread
         auto vg_acc = vg_->getUnsafeAccessor();
         for (int x = 0; x < width; ++x) {
 
-            //data[y * width + x] = max_distance;
             if(!mask[y * width + x]) continue;
             double normalized_x = (x - c_x) / f_x;
 

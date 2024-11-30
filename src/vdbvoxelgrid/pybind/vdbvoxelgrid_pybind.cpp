@@ -34,8 +34,7 @@ openvdb::Mat3d pyarray_to_matrix3d(const py::array_t<double>& input) {
     return {static_cast<double*>(buf_info.ptr)};
 };
 
-std::vector<openvdb::Vec3d> pyarray_to_vectors3d(
-    py::array_t<double> &arr) {
+std::vector<openvdb::Vec3d> pyarray_to_vectors3d(py::array_t<double> &arr) {
     if (arr.ndim() != 2 || arr.shape(1) != 3) {
         throw py::cast_error("Array is wrong shape, please use (X, 3).");
     };
@@ -58,7 +57,15 @@ PYBIND11_MODULE(vdbvoxelgrid_pybind, m) {
                 self.Add(pyarray_to_vectors3d(arr));
             }, "points"_a)
         .def("ray_trace",
-            [](VoxelGrid& self, py::array_t<double>& T, py::array_t<double>& K, int height, int width, float max_distance, int min_count, py::array_t<bool>& mask) {
+            [](
+            VoxelGrid& self,
+            py::array_t<double>& T,
+            py::array_t<double>& K,
+            int height,
+            int width,
+            float max_distance,
+            int min_count,
+            py::array_t<bool>& mask) {
                 // convert mask
                 py::buffer_info buf_info = mask.request();
                 if(buf_info.ndim != 2 || buf_info.shape[0] != height || buf_info.shape[1] != width){
@@ -80,14 +87,21 @@ PYBIND11_MODULE(vdbvoxelgrid_pybind, m) {
                 // convert return value
                 py::array_t<double> arr({height, width}, data.data());
                 return arr;
-            }, "T"_a, "K"_a, "height"_a, "width"_a, "max_distance"_a, "min_count"_a, "mask"_a)
+            },
+            "T"_a, "K"_a, "height"_a, "width"_a, "max_distance"_a, "min_count"_a, "mask"_a
+            )
         .def("__len__",
             [](VoxelGrid& self) {
                 return self.Length();
             })
         .def("extract",
             [](VoxelGrid& self) {
-                return self.Extract();
+                auto map = self.Extract();
+                pybind11::dict ret_dict;
+                for (auto it = map.begin(); it != map.end(); it++) {
+                    ret_dict[py::str(it->first)] = py::array_t<int>(it->second.size(), it->second.data());
+                }
+                return ret_dict;
             });
 }
 
