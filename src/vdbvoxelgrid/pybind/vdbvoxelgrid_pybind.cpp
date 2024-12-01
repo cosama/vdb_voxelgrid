@@ -97,6 +97,8 @@ PYBIND11_MODULE(vdbvoxelgrid_pybind, m) {
         .def("extract",
             [](VoxelGrid& self) {
                 auto map = self.Extract();
+
+                // this is not necessary, pybind11 can do it, but this is 5 times faster
                 pybind11::dict ret_dict;
                 for (auto it = map.begin(); it != map.end(); it++) {
                     ret_dict[py::str(it->first)] = py::array_t<int>(it->second.size(), it->second.data());
