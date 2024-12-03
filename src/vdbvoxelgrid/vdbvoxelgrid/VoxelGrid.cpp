@@ -1,4 +1,5 @@
 #include "VoxelGrid.h"
+#include "Tracer.h"
 
 // OpenVDB
 #include <openvdb/Types.h>
@@ -64,74 +65,88 @@ std::map<std::string, std::vector<int>> VoxelGrid::Extract(){
 
 
 // Function to generate rays from camera parameters
-std::vector<double> VoxelGrid::RayTrace(
+// std::vector<double> VoxelGrid::RayTrace(
+//     const openvdb::Mat4d& T,    
+//     const openvdb::Mat3d& K,
+//     int height,
+//     int width,
+//     float max_distance,
+//     VoxelDataType min_count,
+//     std::vector<bool> mask) {
+
+//     double f_x = K(0, 0);
+//     double f_y = K(1, 1);
+//     double c_x = K(0, 2);
+//     double c_y = K(1, 2);
+
+//     openvdb::Mat3d rot(
+//         T(0, 0), T(0, 1), T(0, 2),
+//         T(1, 0), T(1, 1), T(1, 2),
+//         T(2, 0), T(2, 1), T(2, 2)
+//     );
+//     openvdb::Vec3d eye(T(0, 3), T(1, 3), T(2, 3));
+
+//     std::vector<double> data(height * width, max_distance);
+
+//     #pragma omp parallel for 
+//     for (int y = 0; y < height; ++y) {
+//         double normalized_y = (y - c_y) / f_y;
+//         // each thread needs its own hdda
+//         openvdb::math::VolumeHDDA<VoxelTreeType, openvdb::math::Ray<float>, 2> hdda;
+//         // Get the "unsafe" version of the grid accessors, one per thread
+//         auto vg_acc = vg_->getUnsafeAccessor();
+//         for (int x = 0; x < width; ++x) {
+
+//             if(!mask[y * width + x]) continue;
+//             double normalized_x = (x - c_x) / f_x;
+
+//             openvdb::Vec3d dir_camera(normalized_x, normalized_y, 1.0);
+//             auto dir = rot * dir_camera;
+
+//             auto ray = openvdb::math::Ray<float>(eye, dir, 0, max_distance).worldToIndex(*vg_);
+//             auto end_time = ray.t1();
+
+//             // ray trace on the leaf levels
+//             auto times = hdda.march(ray, vg_acc);
+
+//             // we reached the end without a hit
+//             if (!times.valid()) continue;
+
+//             // ray trace the rest on the node level
+//             ray.setTimes(times.t0, end_time);
+//             openvdb::math::DDA<decltype(ray)> dda(ray);
+//             do {
+//                 const auto voxel = dda.voxel();
+//                 auto is_active = vg_acc.isValueOn(voxel);
+//                 if (is_active) {
+//                     auto count = vg_acc.getValue(voxel);
+//                     if (count >= min_count) {
+//                         data[y * width + x] = dda.time() * voxel_size_;
+//                         break;
+//                     }
+//                 }
+//             } while (dda.step());
+//             // std::vector<openvdb::math::Ray<float>::TimeSpan> hits;
+//             // hdda.hits(ray, tsdf_acc, hits);
+//         }
+//     }
+
+//     return data;
+// }
+
+std::tuple<std::vector<char>, std::vector<openvdb::Vec3d>, std::vector<openvdb::Coord>> VoxelGrid::RayTrace(
     const openvdb::Mat4d& T,    
     const openvdb::Mat3d& K,
     int height,
     int width,
     float max_distance,
     VoxelDataType min_count,
-    std::vector<bool> mask) {
+    std::vector<bool> mask
+) {
+    Tracer<VoxelTreeType> tracer(vg_);
+    return tracer.ray_trace_image(T, K, height, width, max_distance, min_count, mask);
+};
 
-    double f_x = K(0, 0);
-    double f_y = K(1, 1);
-    double c_x = K(0, 2);
-    double c_y = K(1, 2);
-
-    openvdb::Mat3d rot(
-        T(0, 0), T(0, 1), T(0, 2),
-        T(1, 0), T(1, 1), T(1, 2),
-        T(2, 0), T(2, 1), T(2, 2)
-    );
-    openvdb::Vec3d eye(T(0, 3), T(1, 3), T(2, 3));
-
-    std::vector<double> data(height * width, max_distance);
-
-    #pragma omp parallel for 
-    for (int y = 0; y < height; ++y) {
-        double normalized_y = (y - c_y) / f_y;
-        // each thread needs its own hdda
-        openvdb::math::VolumeHDDA<VoxelTreeType, openvdb::math::Ray<float>, 2> hdda;
-        // Get the "unsafe" version of the grid accessors, one per thread
-        auto vg_acc = vg_->getUnsafeAccessor();
-        for (int x = 0; x < width; ++x) {
-
-            if(!mask[y * width + x]) continue;
-            double normalized_x = (x - c_x) / f_x;
-
-            openvdb::Vec3d dir_camera(normalized_x, normalized_y, 1.0);
-            auto dir = rot * dir_camera;
-
-            auto ray = openvdb::math::Ray<float>(eye, dir, 0, max_distance).worldToIndex(*vg_);
-            auto end_time = ray.t1();
-
-            // ray trace on the leaf levels
-            auto times = hdda.march(ray, vg_acc);
-
-            // we reached the end without a hit
-            if (!times.valid()) continue;
-
-            // ray trace the rest on the node level
-            ray.setTimes(times.t0, end_time);
-            openvdb::math::DDA<decltype(ray)> dda(ray);
-            do {
-                const auto voxel = dda.voxel();
-                auto is_active = vg_acc.isValueOn(voxel);
-                if (is_active) {
-                    auto count = vg_acc.getValue(voxel);
-                    if (count >= min_count) {
-                        data[y * width + x] = dda.time() * voxel_size_;
-                        break;
-                    }
-                }
-            } while (dda.step());
-            // std::vector<openvdb::math::Ray<float>::TimeSpan> hits;
-            // hdda.hits(ray, tsdf_acc, hits);
-        }
-    }
-
-    return data;
-}
 
 int VoxelGrid::Length(){
     return vg_->activeVoxelCount();

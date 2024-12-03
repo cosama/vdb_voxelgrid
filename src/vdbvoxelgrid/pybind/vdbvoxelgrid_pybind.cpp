@@ -85,8 +85,17 @@ PYBIND11_MODULE(vdbvoxelgrid_pybind, m) {
                 );
 
                 // convert return value
-                py::array_t<double> arr({height, width}, data.data());
-                return arr;
+                //py::array_t<double> arr({height, width}, data.data());
+                // return arr;
+                // std::vector<char> hits = std::get<0>(data);
+                // auto intersects = std::get<1>(data);
+                // auto indices = std::get<2>(data);
+
+                // return py::make_tuple(
+                //     py::array_t<bool>(hits.size(), reinterpret_cast<bool*>(hits.data())), 
+                //     py::array_t<double>({intersects.size(), 3}, reinterpret_cast<double*>(intersects.data())),
+                //     py::array_t<int32_t>({indices.size(), 3}, reinterpret_cast<double*>(indices.data()))
+                // );
             },
             "T"_a, "K"_a, "height"_a, "width"_a, "max_distance"_a, "min_count"_a, "mask"_a
             )
