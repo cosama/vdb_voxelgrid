@@ -22,7 +22,7 @@
 
 # Include superbuild dependencies for tbb and blos-c
 include(${CMAKE_CURRENT_LIST_DIR}/../tbb/tbb.cmake)
-# include(${CMAKE_CURRENT_LIST_DIR}/../blosc/blosc.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/../blosc/blosc.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/../boost/boost.cmake)
 include(ExternalProject)
 include(GNUInstallDirs)
@@ -50,11 +50,11 @@ ExternalProject_Add(
              -DUSE_CCACHE=ON
              -DUSE_STATIC_DEPENDENCIES=ON
              -DUSE_ZLIB=OFF
-             -DUSE_BLOCS=OFF
+             # -DUSE_BLOCS=OFF
              # Specify super libraries root directories
              -DBOOST_ROOT=${BOOST_ROOT}
              -DTBB_ROOT=${TBB_ROOT}
-             # -DBLOSC_ROOT=${BLOSC_ROOT}
+             -DBLOSC_ROOT=${BLOSC_ROOT}
 )
 
 ExternalProject_Add_StepDependencies(external_openvdb build external_boost)
