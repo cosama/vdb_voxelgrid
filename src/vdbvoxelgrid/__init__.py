@@ -24,6 +24,4 @@ __version__ = "0.1.6"
 from .pybind.vdb_voxelgrid import VoxelGrid
 
 
-__all__ = [
-    "VoxelGrid"
-]
+__all__ = ["VoxelGrid"]

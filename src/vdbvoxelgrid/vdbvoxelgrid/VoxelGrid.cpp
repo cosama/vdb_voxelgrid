@@ -64,7 +64,7 @@ std::map<std::string, std::vector<int>> VoxelGrid::Extract(){
 
 
 // Function to generate rays from camera parameters
-std::vector<double> VoxelGrid::RayTrace(
+std::vector<double> VoxelGrid::RayTraceDepth(
     const openvdb::Mat4d& T,    
     const openvdb::Mat3d& K,
     int height,
@@ -100,6 +100,7 @@ std::vector<double> VoxelGrid::RayTrace(
             double normalized_x = (x - c_x) / f_x;
 
             openvdb::Vec3d dir_camera(normalized_x, normalized_y, 1.0);
+            dir_camera.normalize();
             auto dir = rot * dir_camera;
 
             auto ray = openvdb::math::Ray<float>(eye, dir, 0, max_distance).worldToIndex(*vg_);
@@ -131,6 +132,90 @@ std::vector<double> VoxelGrid::RayTrace(
     }
 
     return data;
+}
+
+
+std::vector<openvdb::Vec3d> VoxelGrid::RayTracePoints(
+    const openvdb::Mat4d& T,    
+    const openvdb::Mat3d& K,
+    int height,
+    int width,
+    float max_distance,
+    VoxelDataType min_count,
+    std::vector<bool> mask) {
+
+    double f_x = K(0, 0);
+    double f_y = K(1, 1);
+    double c_x = K(0, 2);
+    double c_y = K(1, 2);
+
+    openvdb::Mat3d rot(
+        T(0, 0), T(0, 1), T(0, 2),
+        T(1, 0), T(1, 1), T(1, 2),
+        T(2, 0), T(2, 1), T(2, 2)
+    );
+    openvdb::Vec3d eye(T(0, 3), T(1, 3), T(2, 3));
+
+    // Store masked (x, y) coordinates
+    std::vector<std::pair<int, int>> masked_pixels;
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            if (mask[y * width + x]) {
+                masked_pixels.push_back({x, y});
+            }
+        }
+    }
+
+    std::vector<openvdb::Vec3d> intersection_points(masked_pixels.size());
+    std::vector<bool> hit_flags(masked_pixels.size(), false); // To track if a hit occurred
+
+    #pragma omp parallel for 
+    for (unsigned int i = 0; i < masked_pixels.size(); ++i) {
+        int x = masked_pixels[i].first;
+        int y = masked_pixels[i].second;
+
+        double normalized_y = (y - c_y) / f_y;
+        openvdb::math::VolumeHDDA<VoxelTreeType, openvdb::math::Ray<float>, 2> hdda;
+        auto vg_acc = vg_->getUnsafeAccessor();
+
+        double normalized_x = (x - c_x) / f_x;
+
+        openvdb::Vec3d dir_camera(normalized_x, normalized_y, 1.0);
+        dir_camera.normalize();
+        auto dir = rot * dir_camera;
+
+        auto ray = openvdb::math::Ray<float>(eye, dir, 0, max_distance).worldToIndex(*vg_);
+        auto end_time = ray.t1();
+
+        auto times = hdda.march(ray, vg_acc);
+
+        if (!times.valid()) continue;
+
+        ray.setTimes(times.t0, end_time);
+        openvdb::math::DDA<decltype(ray)> dda(ray);
+        do {
+            const auto voxel = dda.voxel();
+            auto is_active = vg_acc.isValueOn(voxel);
+            if (is_active) {
+                auto count = vg_acc.getValue(voxel);
+                if (count >= min_count) {
+                    intersection_points[i] = eye + dir * dda.time() * voxel_size_;
+                    hit_flags[i] = true;
+                    break;
+                }
+            }
+        } while (dda.step());
+    }
+
+    // Filter out non-hits and return the valid intersection points
+    std::vector<openvdb::Vec3d> final_intersection_points;
+    for (unsigned int i = 0; i < masked_pixels.size(); ++i) {
+        if (hit_flags[i]) {
+            final_intersection_points.push_back(intersection_points[i]);
+        }
+    }
+
+    return final_intersection_points;
 }
 
 int VoxelGrid::Length(){

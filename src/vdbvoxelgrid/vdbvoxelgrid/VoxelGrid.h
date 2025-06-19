@@ -21,7 +21,16 @@ public:
 
     /// @brief Integrates a new (globally aligned) PointCloud into the current
     /// tsdf_ volume. Not used by python, but useful for C++ projects.
-    std::vector<double> RayTrace(
+    std::vector<double> RayTraceDepth(
+        const openvdb::Mat4d& T,
+        const openvdb::Mat3d& K,
+        int height,
+        int width,
+        float max_distance,
+        VoxelDataType min_counts,
+        std::vector<bool> mask);
+
+    std::vector<openvdb::Vec3d>  RayTracePoints(
         const openvdb::Mat4d& T,
         const openvdb::Mat3d& K,
         int height,
