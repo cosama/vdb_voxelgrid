@@ -37,7 +37,7 @@ class VoxelGrid:
         return f"VoxelGrid with:\n" f"voxel_size    = {self.voxel_size}\n"
 
     def add(self, points) -> None:
-        return self._vg.add(np.asfarray(points))
+        return self._vg.add(np.asarray(points, dtype=float, order="C"))
 
     def ray_trace_depth(self, T, K, height, width, max_distance, min_count, mask=None) -> None:
         T = np.asarray(T, dtype=float, order="C")
