@@ -31,16 +31,6 @@ if(SILENCE_WARNINGS)
   set(ExternalProject_CMAKE_CXX_FLAGS "-DCMAKE_CXX_FLAGS=-w")
 endif()
 
-if(BUILD_PYTHON_BINDINGS)
-  if(USE_SYSTEM_PYBIND11)
-    find_package(pybind11 QUIET)
-  endif()
-  if(NOT USE_SYSTEM_PYBIND11 OR NOT pybind11_FOUND)
-    set(USE_SYSTEM_PYBIND11 OFF)
-    include(${CMAKE_CURRENT_LIST_DIR}/pybind11/pybind11.cmake)
-  endif()
-endif()
-
 if(USE_SYSTEM_OPENVDB)
   # When OpenVDB is available on the system, we just go for the dynamic version of it
   include(GNUInstallDirs)
