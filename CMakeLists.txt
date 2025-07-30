@@ -50,7 +50,7 @@ add_subdirectory(src)
 if(BUILD_PYTHON_BINDINGS)
   install(
     TARGETS vdbvoxelgrid_pybind
-    DESTINATION vdbvoxelgrid # This MUST match 'wheel.install-dir' in pyproject.toml
+    DESTINATION vdbvoxelgrid/pybind
     COMPONENT python
   )
 endif()
