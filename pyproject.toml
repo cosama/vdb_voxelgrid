@@ -22,7 +22,6 @@ classifiers = [
 
 [tool.scikit-build]
 cmake.args = ["-DBUILD_PYTHON_BINDINGS=ON"]
-wheel.install-dir = "vdbvoxelgrid"
 
 [tool.black]
 line-length = 100
