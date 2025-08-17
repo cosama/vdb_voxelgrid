@@ -42,24 +42,59 @@ void VoxelGrid::Add(const std::vector<openvdb::Vec3d>& points) {
 
 
 // function to return the voxelgrid
-std::map<std::string, std::vector<int>> VoxelGrid::Extract(){
-    int length = vg_->activeVoxelCount();
-    std::vector<int> counts(length);
-    std::vector<int> ix(length);
-    std::vector<int> iy(length);
-    std::vector<int> iz(length);
+// std::map<std::string, std::vector<int>> VoxelGrid::Extract(){
+//     int length = vg_->activeVoxelCount();
+//     std::vector<int> counts(length);
+//     std::vector<int> ix(length);
+//     std::vector<int> iy(length);
+//     std::vector<int> iz(length);
 
-    int i = 0;
+//     int i = 0;
+//     for (auto iter = vg_->cbeginValueOn(); iter; ++iter) {
+//         float count = iter.getValue();
+//         auto ijk = iter.getCoord();
+//         counts[i] = count;
+//         ix[i] = ijk[0];
+//         iy[i] = ijk[1];
+//         iz[i] = ijk[2];
+//         i++;
+//     }
+//     return {{"counts", counts}, {"ix", ix}, {"iy", iy}, {"iz", iz}};
+// }
+std::map<std::string, std::vector<float>> VoxelGrid::Extract()
+{
+    const int length = static_cast<int>(vg_->activeVoxelCount());
+
+    std::vector<float> counts;
+    std::vector<float> x;
+    std::vector<float> y;
+    std::vector<float> z;
+
+    counts.reserve(length);
+    x.reserve(length);
+    y.reserve(length);
+    z.reserve(length);
+
+    const openvdb::math::Transform& xform = vg_->transform();
+
     for (auto iter = vg_->cbeginValueOn(); iter; ++iter) {
-        float count = iter.getValue();
-        auto ijk = iter.getCoord();
-        counts[i] = count;
-        ix[i] = ijk[0];
-        iy[i] = ijk[1];
-        iz[i] = ijk[2];
-        i++;
+        float count = static_cast<float>(iter.getValue());
+        counts.push_back(count);
+
+        const openvdb::Coord& ijk = iter.getCoord();
+
+        const openvdb::Vec3d worldPos = xform.indexToWorld(ijk);
+        x.push_back(static_cast<float>(worldPos.x()));
+        y.push_back(static_cast<float>(worldPos.y()));
+        z.push_back(static_cast<float>(worldPos.z()));
     }
-    return {{"counts", counts}, {"ix", ix}, {"iy", iy}, {"iz", iz}};
+
+    return {
+        {"counts", std::move(counts)},
+        {"x",      std::move(x)},
+        {"y",      std::move(y)},
+        {"z",      std::move(z)}
+    };
 }
 
 

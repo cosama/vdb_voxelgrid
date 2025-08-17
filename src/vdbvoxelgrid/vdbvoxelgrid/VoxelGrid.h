@@ -41,7 +41,7 @@ public:
 
     int Length();
 
-    std::map<std::string, std::vector<int>> Extract();
+    std::map<std::string, std::vector<float>> Extract();
 
 public:
     /// OpenVDB Grids modeling the signed distance, weight and color
