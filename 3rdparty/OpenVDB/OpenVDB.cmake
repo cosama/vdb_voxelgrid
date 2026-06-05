@@ -27,47 +27,63 @@ include(${CMAKE_CURRENT_LIST_DIR}/../boost/boost.cmake)
 include(ExternalProject)
 include(GNUInstallDirs)
 
-# Simulate a local installation of OpenVDB library
-ExternalProject_Add(
-  external_openvdb
-  PREFIX openvdb
-  # TODO: Update these once changes has been merged to upstream GIT_REPOSITORY
-  # https://github.com/AcademySoftwareFoundation/openvdb.git
-  GIT_REPOSITORY https://github.com/AcademySoftwareFoundation/openvdb.git
-  GIT_TAG v10.1.0
-  GIT_SHALLOW ON
-  UPDATE_COMMAND ""
-  CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
-             ${ExternalProject_CMAKE_ARGS}
-             ${ExternalProject_CMAKE_CXX_FLAGS}
-             # Custom OpenVDB build settings
-             -DCMAKE_POSITION_INDEPENDENT_CODE=ON
-             -DOPENVDB_BUILD_PYTHON_MODULE=OFF
-             -DOPENVDB_BUILD_VDB_PRINT=OFF
-             -DOPENVDB_CORE_SHARED=OFF
-             -DOPENVDB_CORE_STATIC=ON
-             -DOPENVDB_CXX_STRICT=OFF
-             -DUSE_CCACHE=ON
-             -DUSE_STATIC_DEPENDENCIES=ON
-             -DUSE_ZLIB=OFF
-             # -DUSE_BLOCS=OFF
-             # Specify super libraries root directories
-             -DBOOST_ROOT=${BOOST_ROOT}
-             -DTBB_ROOT=${TBB_ROOT}
-             -DBLOSC_ROOT=${BLOSC_ROOT}
-)
+set(_OPENVDB_INSTALL_DIR "${VDBVOXELGRID_EXTERNAL_ROOT}/openvdb")
+set(_OPENVDB_INCLUDE_DIR "${_OPENVDB_INSTALL_DIR}/${CMAKE_INSTALL_INCLUDEDIR}")
+set(_OPENVDB_LIBRARY "${_OPENVDB_INSTALL_DIR}/${CMAKE_INSTALL_LIBDIR}/libopenvdb.a")
+set(_OPENVDB_CACHE_READY FALSE)
 
-ExternalProject_Add_StepDependencies(external_openvdb build external_boost)
-ExternalProject_Add_StepDependencies(external_openvdb build external_tbb)
-# ExternalProject_Add_StepDependencies(external_openvdb build external_blosc)
+if(EXISTS "${_OPENVDB_INCLUDE_DIR}/openvdb/openvdb.h" AND EXISTS "${_OPENVDB_LIBRARY}")
+  set(_OPENVDB_CACHE_READY TRUE)
+  message(STATUS "Reusing cached vendored OpenVDB from ${_OPENVDB_INSTALL_DIR}")
+else()
+  # Simulate a local installation of OpenVDB library
+  ExternalProject_Add(
+    external_openvdb
+    PREFIX "${_OPENVDB_INSTALL_DIR}"
+    # TODO: Update these once changes has been merged to upstream GIT_REPOSITORY
+    # https://github.com/AcademySoftwareFoundation/openvdb.git
+    GIT_REPOSITORY https://github.com/AcademySoftwareFoundation/openvdb.git
+    GIT_TAG v10.1.0
+    GIT_SHALLOW ON
+    UPDATE_COMMAND ""
+    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
+               ${ExternalProject_CMAKE_ARGS}
+               ${ExternalProject_CMAKE_CXX_FLAGS}
+               # Custom OpenVDB build settings
+               -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+               -DOPENVDB_BUILD_PYTHON_MODULE=OFF
+               -DOPENVDB_BUILD_VDB_PRINT=OFF
+               -DOPENVDB_CORE_SHARED=OFF
+               -DOPENVDB_CORE_STATIC=ON
+               -DOPENVDB_CXX_STRICT=OFF
+               -DUSE_CCACHE=ON
+               -DUSE_STATIC_DEPENDENCIES=ON
+               -DUSE_ZLIB=OFF
+               # -DUSE_BLOCS=OFF
+               # Specify super libraries root directories
+               -DBOOST_ROOT=${BOOST_ROOT}
+               -DTBB_ROOT=${TBB_ROOT}
+               -DBLOSC_ROOT=${BLOSC_ROOT}
+    BUILD_BYPRODUCTS "${_OPENVDB_LIBRARY}"
+  )
 
-# Simulate importing OpenVDB::openvdb
-ExternalProject_Get_Property(external_openvdb INSTALL_DIR)
+  ExternalProject_Add_StepDependencies(external_openvdb build external_boost)
+  ExternalProject_Add_StepDependencies(external_openvdb build external_tbb)
+  # ExternalProject_Add_StepDependencies(external_openvdb build external_blosc)
+endif()
+
 add_library(OpenVDBHelper INTERFACE)
-add_dependencies(OpenVDBHelper external_openvdb)
-target_include_directories(OpenVDBHelper INTERFACE ${INSTALL_DIR}/${CMAKE_INSTALL_INCLUDEDIR})
-target_link_directories(OpenVDBHelper INTERFACE ${INSTALL_DIR}/${CMAKE_INSTALL_LIBDIR})
-target_link_libraries(OpenVDBHelper INTERFACE openvdb)
+if(NOT _OPENVDB_CACHE_READY)
+  add_dependencies(OpenVDBHelper external_openvdb)
+endif()
+if(TARGET external_boost)
+  add_dependencies(OpenVDBHelper external_boost)
+endif()
+if(TARGET external_tbb)
+  add_dependencies(OpenVDBHelper external_tbb)
+endif()
+target_include_directories(OpenVDBHelper INTERFACE ${_OPENVDB_INCLUDE_DIR})
+target_link_libraries(OpenVDBHelper INTERFACE ${_OPENVDB_LIBRARY})
 
 # Setup Visible dependencies
 find_package(Threads REQUIRED)

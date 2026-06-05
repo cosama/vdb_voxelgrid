@@ -27,6 +27,14 @@ set(ExternalProject_CMAKE_ARGS
     -DCMAKE_BUILD_TYPE=Release
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON)
 
+# Reuse third-party builds across editable/wheel reinstalls. Scikit-build often
+# configures in a fresh temporary build directory, so relative ExternalProject
+# prefixes would otherwise trigger a full OpenVDB/Boost/TBB/Blosc rebuild on
+# every `pip install -e`.
+set(VDBVOXELGRID_EXTERNAL_ROOT
+    "${PROJECT_SOURCE_DIR}/_skbuild"
+    CACHE PATH "Persistent root for third-party ExternalProject builds")
+
 if(SILENCE_WARNINGS)
   set(ExternalProject_CMAKE_CXX_FLAGS "-DCMAKE_CXX_FLAGS=-w")
 endif()

@@ -21,27 +21,38 @@
 # SOFTWARE.
 
 include(ExternalProject)
-ExternalProject_Add(
-  external_tbb
-  PREFIX tbb
-  URL https://github.com/uxlfoundation/oneTBB/archive/refs/tags/v2022.0.0.tar.gz
-  URL_HASH SHA256=e8e89c9c345415b17b30a2db3095ba9d47647611662073f7fbf54ad48b7f3c2a
-  UPDATE_COMMAND ""
-  CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
-             ${ExternalProject_CMAKE_ARGS}
-             ${ExternalProject_CMAKE_CXX_FLAGS}
-             # custom flags
-             -DTBB_STRICT=OFF
-             -DTBBMALLOC_BUILD=ON
-             -DBUILD_SHARED_LIBS=OFF
-             -DTBB_TEST=OFF)
+set(_TBB_INSTALL_DIR "${VDBVOXELGRID_EXTERNAL_ROOT}/tbb")
+set(_TBB_INCLUDE_DIR "${_TBB_INSTALL_DIR}/include")
+set(_TBB_LIBRARY "${_TBB_INSTALL_DIR}/lib/libtbb.a")
+set(_TBB_CACHE_READY FALSE)
+
+if(EXISTS "${_TBB_INCLUDE_DIR}/oneapi/tbb.h" AND EXISTS "${_TBB_LIBRARY}")
+  set(_TBB_CACHE_READY TRUE)
+  message(STATUS "Reusing cached vendored TBB from ${_TBB_INSTALL_DIR}")
+else()
+  ExternalProject_Add(
+    external_tbb
+    PREFIX "${_TBB_INSTALL_DIR}"
+    URL https://github.com/uxlfoundation/oneTBB/archive/refs/tags/v2022.0.0.tar.gz
+    URL_HASH SHA256=e8e89c9c345415b17b30a2db3095ba9d47647611662073f7fbf54ad48b7f3c2a
+    UPDATE_COMMAND ""
+    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
+               ${ExternalProject_CMAKE_ARGS}
+               ${ExternalProject_CMAKE_CXX_FLAGS}
+               # custom flags
+               -DTBB_STRICT=OFF
+               -DTBBMALLOC_BUILD=ON
+               -DBUILD_SHARED_LIBS=OFF
+               -DTBB_TEST=OFF
+    BUILD_BYPRODUCTS "${_TBB_LIBRARY}")
+endif()
 
 # Simulate importing TBB::tbb for OpenVDBHelper target
-ExternalProject_Get_Property(external_tbb INSTALL_DIR)
-set(TBB_ROOT ${INSTALL_DIR} CACHE INTERNAL "TBB_ROOT Install directory")
+set(TBB_ROOT ${_TBB_INSTALL_DIR} CACHE INTERNAL "TBB_ROOT Install directory")
 add_library(TBBHelper INTERFACE)
-add_dependencies(TBBHelper external_tbb)
-target_include_directories(TBBHelper INTERFACE ${INSTALL_DIR}/include)
-target_link_directories(TBBHelper INTERFACE ${INSTALL_DIR}/lib)
-target_link_libraries(TBBHelper INTERFACE tbb)
+if(NOT _TBB_CACHE_READY)
+  add_dependencies(TBBHelper external_tbb)
+endif()
+target_include_directories(TBBHelper INTERFACE "${_TBB_INCLUDE_DIR}")
+target_link_libraries(TBBHelper INTERFACE "${_TBB_LIBRARY}")
 add_library(TBB::tbb ALIAS TBBHelper)

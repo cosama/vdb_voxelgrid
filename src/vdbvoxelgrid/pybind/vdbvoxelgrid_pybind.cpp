@@ -8,6 +8,8 @@
 #include <pybind11/stl_bind.h>
 
 // std stuff
+#include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "vdbvoxelgrid/VoxelGrid.h"
@@ -47,23 +49,54 @@ std::vector<openvdb::Vec3d> pyarray_to_vectors3d(py::array_t<double> &arr) {
 };
 
 template <typename T>
-py::array_t<double> array2d_from_vector(std::vector<T> &&vec, py::ssize_t rows, py::ssize_t cols) {
+py::array_t<T> array1d_from_vector(std::vector<T> &&vec) {
+    const auto size = static_cast<py::ssize_t>(vec.size());
     if (vec.empty()) {
-        return py::array_t<double>();
+        return py::array_t<T>(size);
     }
 
-    double* data_ptr = reinterpret_cast<double*>(vec.data());
-
     auto vec_uptr = std::make_unique<std::vector<T>>(std::move(vec));
+    T* data_ptr = vec_uptr->data();
     py::capsule vec_owner_capsule(vec_uptr.release(), [](void* ptr) {
         std::unique_ptr<std::vector<T>> released_vec(static_cast<std::vector<T>*>(ptr));
     });
 
-    return py::array_t<double>(
+    return py::array_t<T>(size, data_ptr, vec_owner_capsule);
+};
+
+template <typename T>
+py::array_t<T> array2d_from_vector(std::vector<T> &&vec, py::ssize_t rows, py::ssize_t cols) {
+    if (vec.empty()) {
+        return py::array_t<T>(py::array::ShapeContainer{rows, cols});
+    }
+
+    auto vec_uptr = std::make_unique<std::vector<T>>(std::move(vec));
+    T* data_ptr = vec_uptr->data();
+    py::capsule vec_owner_capsule(vec_uptr.release(), [](void* ptr) {
+        std::unique_ptr<std::vector<T>> released_vec(static_cast<std::vector<T>*>(ptr));
+    });
+
+    return py::array_t<T>(
         {rows, cols},
         data_ptr,
         vec_owner_capsule
     );
+};
+
+py::array_t<double> array2d_from_vec3d(std::vector<openvdb::Vec3d> &&vec) {
+    if (vec.empty()) {
+        return py::array_t<double>(py::array::ShapeContainer{py::ssize_t(0), py::ssize_t(3)});
+    }
+
+    std::vector<double> flat;
+    flat.reserve(vec.size() * 3);
+    for (const auto& point : vec) {
+        flat.push_back(point.x());
+        flat.push_back(point.y());
+        flat.push_back(point.z());
+    }
+
+    return array2d_from_vector(std::move(flat), static_cast<py::ssize_t>(vec.size()), 3);
 };
 
 std::vector<bool> mask_to_bool_vector(const py::array_t<bool>& mask, int height, int width) {
@@ -135,25 +168,101 @@ PYBIND11_MODULE(vdbvoxelgrid_pybind, m) {
                 );
 
                 // convert return value
-                return array2d_from_vector(std::move(data), data.size(), 3);
+                return array2d_from_vec3d(std::move(data));
             },
             "T"_a, "K"_a, "height"_a, "width"_a, "max_distance"_a, "min_count"_a, "mask"_a
+            )
+            .def("ray_trace_to_points",
+            [](
+            VoxelGrid& self,
+            py::array_t<double>& origin,
+            py::array_t<double>& points,
+            int min_count) {
+                py::buffer_info obuf = origin.request();
+                if (obuf.ndim != 1 || obuf.shape[0] != 3) {
+                    throw std::runtime_error("origin must be a 1D array with shape (3,)");
+                }
+                openvdb::Vec3d eye(static_cast<double*>(obuf.ptr));
+
+                auto vec_points = pyarray_to_vectors3d(points);
+                auto data = self.RayTraceToPoints(eye, vec_points, min_count);
+
+                // one range per input point (1D), aligned with `points`
+                return array1d_from_vector(std::move(data));
+            },
+            "origin"_a, "points"_a, "min_count"_a
+            )
+            .def("add_voxels",
+            [](
+            VoxelGrid& self,
+            py::array_t<double>& x,
+            py::array_t<double>& y,
+            py::array_t<double>& z,
+            py::array_t<double>& counts) {
+                auto xu = x.unchecked<1>();
+                auto yu = y.unchecked<1>();
+                auto zu = z.unchecked<1>();
+                auto cu = counts.unchecked<1>();
+                const py::ssize_t n = xu.shape(0);
+                if (yu.shape(0) != n || zu.shape(0) != n || cu.shape(0) != n) {
+                    throw std::runtime_error("x, y, z, counts must have equal length");
+                }
+                std::vector<openvdb::Vec3d> centers(n);
+                std::vector<float> cnts(n);
+                for (py::ssize_t i = 0; i < n; ++i) {
+                    centers[i] = openvdb::Vec3d(xu(i), yu(i), zu(i));
+                    cnts[i] = static_cast<float>(cu(i));
+                }
+                self.AddVoxels(centers, cnts);
+            },
+            "x"_a, "y"_a, "z"_a, "counts"_a
             )
         .def("__len__",
             [](VoxelGrid& self) {
                 return self.Length();
             })
+        .def("to_mesh",
+            [](
+            VoxelGrid& self,
+            int min_count) {
+                auto mesh = self.ToMesh(static_cast<VoxelDataType>(min_count));
+
+                std::vector<float> vertices;
+                vertices.reserve(mesh.points.size() * 3);
+                for (const auto& point : mesh.points) {
+                    vertices.push_back(point.x());
+                    vertices.push_back(point.y());
+                    vertices.push_back(point.z());
+                }
+
+                std::vector<int32_t> faces;
+                faces.reserve(mesh.triangles.size() * 3);
+                for (const auto& tri : mesh.triangles) {
+                    faces.push_back(static_cast<int32_t>(tri[0]));
+                    faces.push_back(static_cast<int32_t>(tri[1]));
+                    faces.push_back(static_cast<int32_t>(tri[2]));
+                }
+
+                pybind11::dict ret_dict;
+                ret_dict["vertices"] = array2d_from_vector(std::move(vertices), mesh.points.size(), 3);
+                ret_dict["faces"] = array2d_from_vector(std::move(faces), mesh.triangles.size(), 3);
+                return ret_dict;
+            },
+            "min_count"_a
+            )
         .def("extract",
-            [](VoxelGrid& self) {
-                auto map = self.Extract();
+            [](VoxelGrid& self, int min_count) {
+                auto map = self.Extract(static_cast<VoxelDataType>(min_count));
 
                 // this is not necessary, pybind11 can do it, but this is 5 times faster
                 pybind11::dict ret_dict;
-                for (auto it = map.begin(); it != map.end(); it++) {
-                    ret_dict[py::str(it->first)] = py::array_t<float>(it->second.size(), it->second.data());
+                for (auto& item : map) {
+                    ret_dict[py::str(item.first)] = array1d_from_vector(std::move(item.second));
                 }
                 return ret_dict;
-            });
+            },
+            "min_count"_a = 0
+            );
 }
 
 }  // namespace vdbvoxelgrid

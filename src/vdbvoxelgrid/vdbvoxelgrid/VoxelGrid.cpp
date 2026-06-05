@@ -6,6 +6,8 @@
 #include <openvdb/math/Ray.h>
 #include <openvdb/openvdb.h>
 
+#include <array>
+#include <unordered_map>
 #include <vector>
 
 namespace vdbvoxelgrid {
@@ -41,6 +43,24 @@ void VoxelGrid::Add(const std::vector<openvdb::Vec3d>& points) {
 }
 
 
+void VoxelGrid::AddVoxels(const std::vector<openvdb::Vec3d>& centers,
+                          const std::vector<float>& counts) {
+    if (centers.size() != counts.size()) {
+        std::cerr << "AddVoxels: centers and counts must have equal length\n";
+        return;
+    }
+
+    const openvdb::math::Transform& xform = vg_->transform();
+    auto vg_acc = vg_->getUnsafeAccessor();
+
+    for (size_t i = 0; i < centers.size(); ++i) {
+        auto v3ijk = xform.worldToIndex(centers[i]);
+        openvdb::Coord ijk(std::round(v3ijk.x()), std::round(v3ijk.y()), std::round(v3ijk.z()));
+        vg_acc.setValue(ijk, static_cast<VoxelDataType>(counts[i]));
+    }
+}
+
+
 // function to return the voxelgrid
 // std::map<std::string, std::vector<int>> VoxelGrid::Extract(){
 //     int length = vg_->activeVoxelCount();
@@ -61,7 +81,7 @@ void VoxelGrid::Add(const std::vector<openvdb::Vec3d>& points) {
 //     }
 //     return {{"counts", counts}, {"ix", ix}, {"iy", iy}, {"iz", iz}};
 // }
-std::map<std::string, std::vector<float>> VoxelGrid::Extract()
+std::map<std::string, std::vector<float>> VoxelGrid::Extract(VoxelDataType min_count)
 {
     const int length = static_cast<int>(vg_->activeVoxelCount());
 
@@ -78,6 +98,10 @@ std::map<std::string, std::vector<float>> VoxelGrid::Extract()
     const openvdb::math::Transform& xform = vg_->transform();
 
     for (auto iter = vg_->cbeginValueOn(); iter; ++iter) {
+        if (iter.getValue() < min_count) {
+            continue;
+        }
+
         float count = static_cast<float>(iter.getValue());
         counts.push_back(count);
 
@@ -253,8 +277,189 @@ std::vector<openvdb::Vec3d> VoxelGrid::RayTracePoints(
     return final_intersection_points;
 }
 
+std::vector<double> VoxelGrid::RayTraceToPoints(
+    const openvdb::Vec3d& origin,
+    const std::vector<openvdb::Vec3d>& points,
+    VoxelDataType min_count) {
+
+    std::vector<double> ranges(points.size());
+
+    #pragma omp parallel for
+    for (unsigned int i = 0; i < points.size(); ++i) {
+        openvdb::Vec3d dir = points[i] - origin;
+        double L = dir.length();
+        // Default: target is fully visible (range == distance to target). This is
+        // also the fail-open answer for a zero-length segment or an empty grid.
+        ranges[i] = L;
+        if (L <= 0.0) continue;
+        dir /= L;
+
+        // Cap the ray at the target distance L (dir is unit, so the parametric
+        // time equals world distance, consistent with dda.time() * voxel_size_).
+        auto ray = openvdb::math::Ray<float>(origin, dir, 0, L).worldToIndex(*vg_);
+        auto end_time = ray.t1();
+
+        // each thread needs its own hdda / accessor
+        openvdb::math::VolumeHDDA<VoxelTreeType, openvdb::math::Ray<float>, 2> hdda;
+        auto vg_acc = vg_->getUnsafeAccessor();
+
+        auto times = hdda.march(ray, vg_acc);
+        if (!times.valid()) continue;
+
+        ray.setTimes(times.t0, end_time);
+        openvdb::math::DDA<decltype(ray)> dda(ray);
+        do {
+            const auto voxel = dda.voxel();
+            if (vg_acc.isValueOn(voxel)) {
+                auto count = vg_acc.getValue(voxel);
+                if (count >= min_count) {
+                    ranges[i] = dda.time() * voxel_size_;
+                    break;
+                }
+            }
+        } while (dda.step());
+    }
+
+    return ranges;
+}
+
 int VoxelGrid::Length(){
     return vg_->activeVoxelCount();
+}
+
+VoxelGrid::MeshData VoxelGrid::ToMesh(VoxelDataType min_count) {
+    MeshData mesh_data;
+    mesh_data.points.reserve(static_cast<size_t>(vg_->activeVoxelCount()) * 8);
+    mesh_data.triangles.reserve(static_cast<size_t>(vg_->activeVoxelCount()) * 12);
+
+    struct CornerKey {
+        int x;
+        int y;
+        int z;
+
+        bool operator==(const CornerKey& other) const {
+            return x == other.x && y == other.y && z == other.z;
+        }
+    };
+
+    struct CornerKeyHash {
+        size_t operator()(const CornerKey& key) const noexcept {
+            const size_t hx = std::hash<int>{}(key.x);
+            const size_t hy = std::hash<int>{}(key.y);
+            const size_t hz = std::hash<int>{}(key.z);
+            return hx ^ (hy << 1U) ^ (hz << 2U);
+        }
+    };
+
+    std::unordered_map<CornerKey, size_t, CornerKeyHash> vertex_lookup;
+    vertex_lookup.reserve(static_cast<size_t>(vg_->activeVoxelCount()) * 8);
+
+    const auto& xform = vg_->transform();
+    auto vg_acc = vg_->getConstAccessor();
+
+    auto get_vertex = [&](int cx, int cy, int cz) -> size_t {
+        CornerKey key{cx, cy, cz};
+        auto it = vertex_lookup.find(key);
+        if (it != vertex_lookup.end()) {
+            return it->second;
+        }
+
+        const openvdb::Vec3d index_pos(
+            static_cast<double>(cx) * 0.5,
+            static_cast<double>(cy) * 0.5,
+            static_cast<double>(cz) * 0.5);
+        const openvdb::Vec3d world_pos = xform.indexToWorld(index_pos);
+        const size_t index = mesh_data.points.size();
+        mesh_data.points.emplace_back(
+            static_cast<float>(world_pos.x()),
+            static_cast<float>(world_pos.y()),
+            static_cast<float>(world_pos.z()));
+        vertex_lookup.emplace(key, index);
+        return index;
+    };
+
+    auto emit_quad = [&](size_t v0, size_t v1, size_t v2, size_t v3) {
+        mesh_data.triangles.emplace_back(
+            static_cast<int>(v0), static_cast<int>(v1), static_cast<int>(v2));
+        mesh_data.triangles.emplace_back(
+            static_cast<int>(v0), static_cast<int>(v2), static_cast<int>(v3));
+    };
+
+    for (auto iter = vg_->cbeginValueOn(); iter; ++iter) {
+        if (iter.getValue() < min_count) {
+            continue;
+        }
+
+        const openvdb::Coord ijk = iter.getCoord();
+        const int i = ijk.x();
+        const int j = ijk.y();
+        const int k = ijk.z();
+
+        const bool xm = !vg_acc.isValueOn(openvdb::Coord(i - 1, j, k)) ||
+            vg_acc.getValue(openvdb::Coord(i - 1, j, k)) < min_count;
+        const bool xp = !vg_acc.isValueOn(openvdb::Coord(i + 1, j, k)) ||
+            vg_acc.getValue(openvdb::Coord(i + 1, j, k)) < min_count;
+        const bool ym = !vg_acc.isValueOn(openvdb::Coord(i, j - 1, k)) ||
+            vg_acc.getValue(openvdb::Coord(i, j - 1, k)) < min_count;
+        const bool yp = !vg_acc.isValueOn(openvdb::Coord(i, j + 1, k)) ||
+            vg_acc.getValue(openvdb::Coord(i, j + 1, k)) < min_count;
+        const bool zm = !vg_acc.isValueOn(openvdb::Coord(i, j, k - 1)) ||
+            vg_acc.getValue(openvdb::Coord(i, j, k - 1)) < min_count;
+        const bool zp = !vg_acc.isValueOn(openvdb::Coord(i, j, k + 1)) ||
+            vg_acc.getValue(openvdb::Coord(i, j, k + 1)) < min_count;
+
+        const int x0 = 2 * i - 1;
+        const int x1 = 2 * i + 1;
+        const int y0 = 2 * j - 1;
+        const int y1 = 2 * j + 1;
+        const int z0 = 2 * k - 1;
+        const int z1 = 2 * k + 1;
+
+        if (xm) {
+            emit_quad(
+                get_vertex(x0, y0, z0),
+                get_vertex(x0, y0, z1),
+                get_vertex(x0, y1, z1),
+                get_vertex(x0, y1, z0));
+        }
+        if (xp) {
+            emit_quad(
+                get_vertex(x1, y0, z0),
+                get_vertex(x1, y1, z0),
+                get_vertex(x1, y1, z1),
+                get_vertex(x1, y0, z1));
+        }
+        if (ym) {
+            emit_quad(
+                get_vertex(x0, y0, z0),
+                get_vertex(x1, y0, z0),
+                get_vertex(x1, y0, z1),
+                get_vertex(x0, y0, z1));
+        }
+        if (yp) {
+            emit_quad(
+                get_vertex(x0, y1, z0),
+                get_vertex(x0, y1, z1),
+                get_vertex(x1, y1, z1),
+                get_vertex(x1, y1, z0));
+        }
+        if (zm) {
+            emit_quad(
+                get_vertex(x0, y0, z0),
+                get_vertex(x0, y1, z0),
+                get_vertex(x1, y1, z0),
+                get_vertex(x1, y0, z0));
+        }
+        if (zp) {
+            emit_quad(
+                get_vertex(x0, y0, z1),
+                get_vertex(x1, y0, z1),
+                get_vertex(x1, y1, z1),
+                get_vertex(x0, y1, z1));
+        }
+    }
+
+    return mesh_data;
 }
 
 }  // namespace vdbvoxelgrid

@@ -53,8 +53,107 @@ class VoxelGrid:
             mask = np.full((height, width), True)
         return self._vg.ray_trace_points(T, K, height, width, max_distance, min_count, mask)
 
-    def extract(self):
-        return self._vg.extract()
+    def add_voxels(self, x, y, z, counts) -> None:
+        """Restore voxels directly from an (x, y, z, counts) world-space table,
+        e.g. one produced by :meth:`extract`."""
+        return self._vg.add_voxels(
+            np.asarray(x, dtype=float, order="C"),
+            np.asarray(y, dtype=float, order="C"),
+            np.asarray(z, dtype=float, order="C"),
+            np.asarray(counts, dtype=float, order="C"),
+        )
+
+    def ray_trace_to_points(self, origin, points, min_count):
+        """Occlusion query: per target in ``points`` (N, 3), the range from
+        ``origin`` (3,) to the first occupied voxel along the ray, capped at the
+        target distance (== target distance when unoccluded)."""
+        return self._vg.ray_trace_to_points(
+            np.asarray(origin, dtype=float, order="C"),
+            np.asarray(points, dtype=float, order="C"),
+            int(min_count),
+        )
+
+    def extract(self, min_count=0):
+        return self._vg.extract(int(min_count))
+
+    def to_mesh(self, min_count):
+        """Convert voxels with count >= ``min_count`` into a triangle mesh.
+
+        Returns a dict with ``vertices`` shaped (N, 3) and ``faces`` shaped
+        (M, 3), both as NumPy arrays.
+        """
+        mesh_fn = getattr(self._vg, "to_mesh", None)
+        if callable(mesh_fn):
+            return mesh_fn(int(min_count))
+
+        # Fallback for older extension builds that do not yet expose the C++
+        # mesh method. Keep the same voxel-surface extraction semantics: emit
+        # only exposed cube faces for voxels whose count crosses the threshold.
+        vox = self.extract()
+        counts = np.asarray(vox.get("counts", ()), dtype=float)
+        if counts.size == 0:
+            return {
+                "vertices": np.zeros((0, 3), dtype=np.float32),
+                "faces": np.zeros((0, 3), dtype=np.int32),
+            }
+
+        x = np.asarray(vox["x"], dtype=float)
+        y = np.asarray(vox["y"], dtype=float)
+        z = np.asarray(vox["z"], dtype=float)
+        keep = counts >= float(min_count)
+        x, y, z = x[keep], y[keep], z[keep]
+        if x.size == 0:
+            return {
+                "vertices": np.zeros((0, 3), dtype=np.float32),
+                "faces": np.zeros((0, 3), dtype=np.int32),
+            }
+
+        voxel = float(self.voxel_size)
+        centers = np.c_[x, y, z]
+        center_keys = [tuple(np.round(c / voxel).astype(int)) for c in centers]
+        center_by_key = {k: c for k, c in zip(center_keys, centers, strict=False)}
+        center_set = set(center_by_key)
+
+        vertex_lookup: dict[tuple[float, float, float], int] = {}
+        vertices: list[list[float]] = []
+        faces: list[list[int]] = []
+
+        def get_vertex(pos: np.ndarray) -> int:
+            key = tuple(np.round(pos, 9))
+            idx = vertex_lookup.get(key)
+            if idx is not None:
+                return idx
+            idx = len(vertices)
+            vertices.append([float(pos[0]), float(pos[1]), float(pos[2])])
+            vertex_lookup[key] = idx
+            return idx
+
+        # For each occupied voxel, emit the 6 cube faces that are not shared by
+        # another occupied voxel.
+        for cx, cy, cz in center_keys:
+            center = center_by_key[(cx, cy, cz)]
+            for dx, dy, dz, corners in (
+                (-1, 0, 0, [(-1, -1, -1), (-1, -1, +1), (-1, +1, +1), (-1, +1, -1)]),
+                (+1, 0, 0, [(+1, -1, -1), (+1, +1, -1), (+1, +1, +1), (+1, -1, +1)]),
+                (0, -1, 0, [(-1, -1, -1), (+1, -1, -1), (+1, -1, +1), (-1, -1, +1)]),
+                (0, +1, 0, [(-1, +1, -1), (-1, +1, +1), (+1, +1, +1), (+1, +1, -1)]),
+                (0, 0, -1, [(-1, -1, -1), (-1, +1, -1), (+1, +1, -1), (+1, -1, -1)]),
+                (0, 0, +1, [(-1, -1, +1), (+1, -1, +1), (+1, +1, +1), (-1, +1, +1)]),
+            ):
+                neighbor = (cx + dx, cy + dy, cz + dz)
+                if neighbor in center_set:
+                    continue
+                quad = [
+                    get_vertex(center + voxel * 0.5 * np.asarray((ox, oy, oz), dtype=float))
+                    for ox, oy, oz in corners
+                ]
+                faces.append([quad[0], quad[1], quad[2]])
+                faces.append([quad[0], quad[2], quad[3]])
+
+        return {
+            "vertices": np.asarray(vertices, dtype=np.float32),
+            "faces": np.asarray(faces, dtype=np.int32),
+        }
 
     def __len__(self):
         return len(self._vg)

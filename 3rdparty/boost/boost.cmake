@@ -33,22 +33,36 @@ set(BOOST_INSTALL
     --prefix=<INSTALL_DIR>)
 
 include(ExternalProject)
-ExternalProject_Add(
-  external_boost
-  PREFIX boost
-  URL ${BOOST_URL}
-  URL_HASH SHA256=${BOOST_URL_SHA256}
-  BUILD_IN_SOURCE true
-  CONFIGURE_COMMAND "${BOOST_CONFIGURE}"
-  BUILD_COMMAND ""
-  INSTALL_COMMAND "${BOOST_INSTALL}")
+set(_BOOST_INSTALL_DIR "${VDBVOXELGRID_EXTERNAL_ROOT}/boost")
+set(_BOOST_INCLUDE_DIR "${_BOOST_INSTALL_DIR}/include")
+set(_BOOST_IOSTREAMS_LIBRARY "${_BOOST_INSTALL_DIR}/lib/libboost_iostreams.a")
+set(_BOOST_REGEX_LIBRARY "${_BOOST_INSTALL_DIR}/lib/libboost_regex.a")
+set(_BOOST_CACHE_READY FALSE)
+
+if(EXISTS "${_BOOST_INCLUDE_DIR}/boost/version.hpp"
+   AND EXISTS "${_BOOST_IOSTREAMS_LIBRARY}"
+   AND EXISTS "${_BOOST_REGEX_LIBRARY}")
+  set(_BOOST_CACHE_READY TRUE)
+  message(STATUS "Reusing cached vendored Boost from ${_BOOST_INSTALL_DIR}")
+else()
+  ExternalProject_Add(
+    external_boost
+    PREFIX "${_BOOST_INSTALL_DIR}"
+    URL ${BOOST_URL}
+    URL_HASH SHA256=${BOOST_URL_SHA256}
+    BUILD_IN_SOURCE true
+    CONFIGURE_COMMAND "${BOOST_CONFIGURE}"
+    BUILD_COMMAND ""
+    INSTALL_COMMAND "${BOOST_INSTALL}"
+    BUILD_BYPRODUCTS "${_BOOST_IOSTREAMS_LIBRARY}" "${_BOOST_REGEX_LIBRARY}")
+endif()
 
 # Simulate importing Boost::iostreams for OpenVDBHelper target
-ExternalProject_Get_Property(external_boost INSTALL_DIR)
-set(BOOST_ROOT ${INSTALL_DIR} CACHE INTERNAL "Boost libraries Install directory")
+set(BOOST_ROOT ${_BOOST_INSTALL_DIR} CACHE INTERNAL "Boost libraries Install directory")
 add_library(BoostIostreamsHelper INTERFACE)
-add_dependencies(BoostIostreamsHelper external_boost_iostreams)
-target_include_directories(BoostIostreamsHelper INTERFACE ${INSTALL_DIR}/include)
-target_link_directories(BoostIostreamsHelper INTERFACE ${INSTALL_DIR}/lib)
-target_link_libraries(BoostIostreamsHelper INTERFACE boost_iostreams.a)
+if(NOT _BOOST_CACHE_READY)
+  add_dependencies(BoostIostreamsHelper external_boost)
+endif()
+target_include_directories(BoostIostreamsHelper INTERFACE "${_BOOST_INCLUDE_DIR}")
+target_link_libraries(BoostIostreamsHelper INTERFACE "${_BOOST_IOSTREAMS_LIBRARY}")
 add_library(Boost::iostreams ALIAS BoostIostreamsHelper)

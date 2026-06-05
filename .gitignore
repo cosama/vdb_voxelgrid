@@ -80,6 +80,9 @@ __pycache__/
 
 # Distribution / packaging
 .Python
+/.ok
+/_skbuild/
+/build_local/
 build/
 develop-eggs/
 dist/
